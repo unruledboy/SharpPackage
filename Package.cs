@@ -11,8 +11,8 @@ namespace SharpPackage
     {
         private static byte[] Header = new byte[] { 0x10, 0x01, 0x10, 0x01 };
         private const long ToStartPosition = 4;
-        private const long LargeBufferSize = 8;
-        private const long SmallBufferSize = 4;
+        private const int LargeBufferSize = 8;
+        private const int SmallBufferSize = 4;
         private const long TocEndPosition = ToStartPosition + LargeBufferSize;
         private const long ContentPosition = 100;
         private const string DateFormat = "yyyy-MM-dd HH:mm:ss";
@@ -122,7 +122,26 @@ namespace SharpPackage
             }
         }
 
-        private static void CopyStream(Stream input, Stream output, long bytes)
+        public void Extract(IList<PartItem> items, Action<Part> process)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                _stream.Seek(item.StartPosition, SeekOrigin.Begin);
+
+                using (var memStream = new MemoryStream())
+                {
+                    var outputStream = _method == CompressionMethod.Deflate ? (Stream)new DeflateStream(_stream, CompressionMode.Decompress, true) : new GZipStream(_stream, CompressionMode.Decompress, true);
+                    using (var deflate = outputStream)
+                    {
+                        CopyStream(deflate, memStream, item.Size);
+                        process(new Part { Stream = memStream, CreatedDate = item.CreatedDate, Name = item.Name, Size = item.Size });
+                    }
+                }
+            }
+        }
+
+        public void CopyStream(Stream input, Stream output, long bytes)
         {
             var buffer = new byte[32768];
             int read;
@@ -136,56 +155,28 @@ namespace SharpPackage
         public IList<PartItem> Read()
         {
             _stream.Seek(ToStartPosition, SeekOrigin.Begin);
-            var buffer = new byte[LargeBufferSize];
-            _stream.Read(buffer, 0, buffer.Length);
-            var tocStartPosition = BitConverter.ToInt64(buffer, 0);
+            var tocStartPosition = BitConverter.ToInt64(ReadValue(LargeBufferSize), 0);
 
             _stream.Seek(TocEndPosition, SeekOrigin.Begin);
-            buffer = new byte[LargeBufferSize];
-            _stream.Read(buffer, 0, buffer.Length);
-            var tocEndPosition = BitConverter.ToInt64(buffer, 0);
+            var tocEndPosition = BitConverter.ToInt64(ReadValue(LargeBufferSize), 0);
 
-            buffer = new byte[SmallBufferSize];
-            _stream.Read(buffer, 0, buffer.Length);
-            _method = (CompressionMethod)BitConverter.ToInt32(buffer, 0);
+            _method = (CompressionMethod)BitConverter.ToInt32(ReadValue(SmallBufferSize), 0);
 
-            buffer = new byte[SmallBufferSize];
-            _stream.Read(buffer, 0, buffer.Length);
-            var itemCount = BitConverter.ToInt32(buffer, 0);
+            var itemCount = BitConverter.ToInt32(ReadValue(SmallBufferSize), 0);
 
             _stream.Seek(tocStartPosition, SeekOrigin.Begin);
             var items = new List<PartItem>();
             for (int i = 0; i < itemCount; i++)
             {
                 var item = new PartItem();
+                var nameSize = BitConverter.ToInt32(ReadValue(SmallBufferSize), 0);
+                item.Name = Encoding.UTF8.GetString(ReadValue(nameSize));
 
-                buffer = new byte[SmallBufferSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                var nameSize = BitConverter.ToInt32(buffer, 0);
-
-                buffer = new byte[nameSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.Name = Encoding.UTF8.GetString(buffer);
-
-                buffer = new byte[LargeBufferSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.Size = BitConverter.ToInt64(buffer, 0);
-
-                buffer = new byte[LargeBufferSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.CompressedSize = BitConverter.ToInt64(buffer, 0);
-
-                buffer = new byte[LargeBufferSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.StartPosition = BitConverter.ToInt64(buffer, 0);
-
-                buffer = new byte[LargeBufferSize];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.EndPosition = BitConverter.ToInt64(buffer, 0);
-
-                buffer = new byte[DateFormat.Length];
-                _stream.Read(buffer, 0, buffer.Length);
-                item.CreatedDate = DateTime.Parse(Encoding.ASCII.GetString(buffer));
+                item.Size = ReadLong();
+                item.CompressedSize = ReadLong();
+                item.StartPosition = ReadLong();
+                item.EndPosition = ReadLong();
+                item.CreatedDate = DateTime.Parse(Encoding.ASCII.GetString(ReadValue(DateFormat.Length)));
 
                 items.Add(item);
             }
@@ -210,36 +201,53 @@ namespace SharpPackage
                 _stream.Write(nameSize, 0, nameSize.Length);
                 _stream.Write(buffer, 0, buffer.Length);
 
-                buffer = BitConverter.GetBytes(item.Size);
-                _stream.Write(buffer, 0, buffer.Length);
-
-                buffer = BitConverter.GetBytes(item.CompressedSize);
-                _stream.Write(buffer, 0, buffer.Length);
-
-                buffer = BitConverter.GetBytes(item.StartPosition);
-                _stream.Write(buffer, 0, buffer.Length);
-
-                buffer = BitConverter.GetBytes(item.EndPosition);
-                _stream.Write(buffer, 0, buffer.Length);
-
-                buffer = Encoding.ASCII.GetBytes(item.CreatedDate.ToString(DateFormat));
-                _stream.Write(buffer, 0, buffer.Length);
+                WriteLong(item.Size);
+                WriteLong(item.CompressedSize);
+                WriteLong(item.StartPosition);
+                WriteLong(item.EndPosition);
+                WriteValue(Encoding.ASCII.GetBytes(item.CreatedDate.ToString(DateFormat)));
             }
 
-            buffer = BitConverter.GetBytes(_stream.Position);
             _stream.Seek(TocEndPosition, SeekOrigin.Begin);
-            _stream.Write(buffer, 0, buffer.Length);
-
-            buffer = BitConverter.GetBytes((int)_method);
-            _stream.Write(buffer, 0, buffer.Length);
-
-            buffer = BitConverter.GetBytes(_items.Count);
-            _stream.Write(buffer, 0, buffer.Length);
+            WriteLong(_stream.Position);
+            WriteInt((int)_method);
+            WriteInt(_items.Count);
 
             _canWrite = false;
 
             if (_isFile)
                 _stream.Close();
+        }
+
+        private void WriteLong(long value)
+        {
+            var buffer = BitConverter.GetBytes(value);
+            WriteValue(buffer);
+        }
+
+        private void WriteInt(int value)
+        {
+            var buffer = BitConverter.GetBytes(value); //damn, GetBytes can't do genrics!!
+            WriteValue(buffer);
+        }
+
+        private void WriteValue(byte[] value)
+        {
+            _stream.Write(value, 0, value.Length);
+        }
+
+        private long ReadLong()
+        {
+            var buffer = new byte[LargeBufferSize];
+            _stream.Read(buffer, 0, buffer.Length);
+            return BitConverter.ToInt64(buffer, 0);
+        }
+
+        private byte[] ReadValue(int size)
+        {
+            var buffer = new byte[size];
+            _stream.Read(buffer, 0, buffer.Length);
+            return buffer;
         }
     }
 }
