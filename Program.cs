@@ -10,9 +10,9 @@ namespace SharpPackage
 
         static void Main(string[] args)
         {
-            //Create(packFile);
-            //Extract(packFile);
-            ExtractStream(packFile);
+            Create(packFile);
+            Extract(packFile);
+            //ExtractStream(packFile);
             Console.WriteLine("done");
             Console.Read();
         }
