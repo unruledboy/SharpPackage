@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
@@ -39,19 +39,14 @@ namespace SharpPackage
                 if (method == CompressionMethod.None)
                     method = CompressionMethod.Deflate;
                 _stream.Write(Header, 0, Header.Length);
-                SeekContent();
-            }
-            else
+				_stream.Seek(ContentPosition, SeekOrigin.Begin);
+			}
+			else
             {
                 var header = new byte[Header.Length];
                 if (_stream.Read(header, 0, header.Length) != header.Length || !header.SequenceEqual(Header))
                     throw new InvalidOperationException("Invalid package file");
             }
-        }
-
-        private void SeekContent()
-        {
-            _stream.Seek(ContentPosition, SeekOrigin.Begin);
         }
 
         public static Package Create(string file, CompressionMethod method)
@@ -96,9 +91,8 @@ namespace SharpPackage
 
         public void Extract(IList<PartItem> items, string directory, bool overwrite)
         {
-            for (int i = 0; i < items.Count; i++)
-            {
-                var item = items[i];
+			foreach (var item in items)
+			{
                 var targetFile = Path.Combine(directory, item.Name);
                 if (File.Exists(targetFile))
                 {
@@ -124,9 +118,8 @@ namespace SharpPackage
 
         public void Extract(IList<PartItem> items, Action<Part> process)
         {
-            for (int i = 0; i < items.Count; i++)
-            {
-                var item = items[i];
+			foreach (var item in items)
+			{
                 _stream.Seek(item.StartPosition, SeekOrigin.Begin);
 
                 using (var memStream = new MemoryStream())
@@ -166,19 +159,20 @@ namespace SharpPackage
 
             _stream.Seek(tocStartPosition, SeekOrigin.Begin);
             var items = new List<PartItem>();
-            for (int i = 0; i < itemCount; i++)
+            for (var i = 0; i < itemCount; i++)
             {
-                var item = new PartItem();
                 var nameSize = BitConverter.ToInt32(ReadValue(SmallBufferSize), 0);
-                item.Name = Encoding.UTF8.GetString(ReadValue(nameSize));
+				var item = new PartItem
+				{
+					Name = Encoding.UTF8.GetString(ReadValue(nameSize)),
+					Size = ReadLong(),
+					CompressedSize = ReadLong(),
+					StartPosition = ReadLong(),
+					EndPosition = ReadLong(),
+					CreatedDate = DateTime.Parse(Encoding.ASCII.GetString(ReadValue(DateFormat.Length)))
+				};
 
-                item.Size = ReadLong();
-                item.CompressedSize = ReadLong();
-                item.StartPosition = ReadLong();
-                item.EndPosition = ReadLong();
-                item.CreatedDate = DateTime.Parse(Encoding.ASCII.GetString(ReadValue(DateFormat.Length)));
-
-                items.Add(item);
+				items.Add(item);
             }
 
             return items;
@@ -193,9 +187,8 @@ namespace SharpPackage
 
             _stream.Seek(tocPosition, SeekOrigin.Begin);
 
-            for (int i = 0; i < _items.Count; i++)
-            {
-                var item = _items[i];
+			foreach (var item in _items)
+			{
                 buffer = Encoding.UTF8.GetBytes(item.Name);
                 var nameSize = BitConverter.GetBytes(buffer.Length);
                 _stream.Write(nameSize, 0, nameSize.Length);
@@ -227,7 +220,7 @@ namespace SharpPackage
 
         private void WriteInt(int value)
         {
-            var buffer = BitConverter.GetBytes(value); //damn, GetBytes can't do genrics!!
+            var buffer = BitConverter.GetBytes(value); //damn, GetBytes can't do generics!!
             WriteValue(buffer);
         }
 
